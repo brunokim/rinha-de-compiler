@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "rinha-de-compiler"
+version = "0.1.0"
+description = ""
+authors = ["Bruno Kim <brunokim.mc@gmail.com>"]
+readme = "README.md"
+packages = [{include = "rinha_de_compiler"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+attrs = "^23.1.0"
+cattrs = "^23.1.2"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.1"
+black = "^23.7.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

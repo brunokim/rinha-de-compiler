@@ -1,0 +1,23 @@
+06/Set/2023
+
+Testei rodar o binário Rust q já está presente
+
+    cargo build
+
+Deu erro de que a versão estava desatualizada, atualizando
+
+    rustup update
+    cargo build
+
+Novo erro E0554: https://stackoverflow.com/questions/53136717/errore0554-feature-may-not-be-used-on-the-stable-release-channel-couldnt
+
+    rustup install nightly
+    cargo +nightly build
+
+Binário escrito em target/debug/rinha
+
+    target/debug/rinha files/fib.rinha
+
+AST obtida com sucesso, equivalente à presente em files/fib.json
+
+Inicializando poetry
