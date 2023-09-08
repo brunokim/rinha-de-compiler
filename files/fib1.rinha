@@ -6,9 +6,6 @@ let fib = fn (n) => {
   }
 };
 
-<<<<<<< HEAD
-print (fib(10))
-=======
 let run_fib = fn (n) => {
     let f = fib(n);
     let _ = print("Fibonacci(");
@@ -22,4 +19,3 @@ let run_fib = fn (n) => {
 let _ = run_fib(10);
 let _ = run_fib(20);
 run_fib(24)
->>>>>>> 81619c7 (Make interpreter work)
