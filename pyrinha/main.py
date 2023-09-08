@@ -20,7 +20,7 @@ A biblioteca 'cattrs' é uma companheira de 'attrs' para conversão de classes p
 dicts.
 """
 
-from attrs import field, define, frozen
+from attrs import field, define, frozen, evolve
 from cattrs import Converter
 
 """
@@ -369,67 +369,89 @@ utiliza o _valor_ do Enum como chave para a instância, e nós queremos usar o _
 
 converter.register_structure_hook(BinaryOp, lambda obj, t: BinaryOp[obj.upper()])
 
-# ---- Cells ----
+# ---- Values ----
 
 """
-Até o momento utilizamos apenas @frozen para definir classes com 'attrs'. @frozen
-se destina a classes imutáveis, que mantém os mesmos valores da sua inicialização.
-
-Agora, utilizamos o @define para definir uma classe mutável, que pode alterar os
-seus valores internos.
+Até agora nós modelamos apenas a representação estática de um programa, na forma de
+nós da árvore de sintaxe abstrata. Agora vamos modelar os valores de _runtime_ do
+programa, que serão executados pelo interpretador.
 """
 
 
-@define
-class Cell:
+@frozen
+class Value:
     pass
 
 
-@define
+@frozen
+class Literal(Value):
+    "Literal contém um valor de Python wrapped como um valor de interpretador."
+    x: int | str | bool
+
+    def __str__(self):
+        return str(self.x)
+
+
+"""
+Durante a execução, nós precisamos manter um registro de quais variáveis já foram
+definidas, e associdas a qual valor. Por exemplo,
+
+    let x = 10;
+    print (x)
+
+Na linha #2, a variável 'x' precisa estar associada ao valor 10, para sabermos o que
+escrever na tela. Este registro se chama "environment", que modelamos no Env abaixo.
+
+Nossa definição de Env copia todos os valores definidos anteriormente para um novo
+dicionário e inclui (ou sobrescreve) novas associações. Um novo environment é criado
+a cada 'Let', e ao invocar uma função, onde os parâmetros são associados aos valores
+concretos dos argumentos. Veremos em mais detalhes no Interpretador.
+"""
+
+
+@frozen
 class Env:
-    values: dict[str, Cell] = field(factory=dict, converter=dict)
+    # Apesar da classe ser marcada como 'frozen', ou imutável, isso não se estende
+    # aos seus campos. Para garantir que o dict abaixo não seja modificado, precisamos
+    # confiar apenas na nossa disciplina.
+    values: dict[str, Value] = field(factory=dict, converter=dict)
 
     @classmethod
     def global_env(cls):
         return Env(
             {
-                "true": BoolCell(True),
-                "false": BoolCell(False),
+                "true": Literal(True),
+                "false": Literal(False),
             }
         )
 
-    def with_values(self, extra: dict[str, Cell]):
+    def with_values(self, extra: dict[str, Value]) -> Value:
+        "Cria um novo Env com base no atual, e contendo as associações em extra"
         values = dict(self.values)
         values.update(extra)
         return Env(values)
 
 
-@define
-class StrCell(Cell):
-    value: str
+"""
+Além dos valores atômicos descritos anteriormente, também precisamos modelar uma
+função anônima em tempo de execução. Funções podem ser passadas como parâmetros,
+associadas a uma variável, e até impressas com 'print'.
 
-    def __str__(self):
-        return self.value
+Em runtime, uma função captura o environment onde ela foi declarada, para ser
+pura e imutável. Considere por exemplo:
 
+    let x = 1;                   // Env: {x: 1}
+    let f = fn (a) { a + x };    // Env: {x: 1, f: <Closure#... fn (a)>}
+    let x = 2;                   // Env: {x: 2, f: <Closure#... fn (a)>}
+    print(f(10))
 
-@define
-class IntCell(Cell):
-    value: int
-
-    def __str__(self):
-        return str(self.value)
-
-
-@define
-class BoolCell(Cell):
-    value: bool
-
-    def __str__(self):
-        return "true" if self.value else "false"
+Ao chamar a função na linha 4, esperamos que imprima '11', tendo capturado o
+valor de x definido na linha 1.
+"""
 
 
-@define
-class Closure(Cell):
+@frozen
+class Closure(Value):
     function: Function
     env: Env
 
@@ -440,6 +462,28 @@ class Closure(Cell):
 
 # ---- Interpreter ----
 
+"""
+Agora chegamos à parte divertida: interpretar o código!
+
+Como a linguagem Rinha é uma linguagem funcional e pura (excetuando 'print'),
+vamos usar isso a nosso favor no design do interpretador. Por exemplo, o
+interpretador se baseia somente em _calcular valores_, computando uma saída
+a partir das entradas.
+
+Vamos escrever primeiro uma função 'evaluate0' que é bem simples e
+ineficiente, mas que pelo menos vai servir de padrão para desenvolvimentos
+mais complexos posteriores. Essa função será chamada recursivamente quando for
+necessário calcular sub-valores.
+
+É interessante que quase todas as expressões podem produzir
+
+Uma das facilidades
+é não existir a possibilidade de uma variável mudar de valor, o que complicaria
+um pouco a implementação de Closure. Podemos apenas referenciar o environment
+presente onde uma função é declarada, que todos os valores serão os mesmos em
+todos os instantes onde ela será executada.
+"""
+
 
 class ExecutionError(Exception):
     pass
@@ -449,12 +493,12 @@ def run_file(file: File):
     return evaluate(Env.global_env(), file.expression)
 
 
-def evaluate(env: Env, term: Term) -> tuple[Env, Cell]:
+def evaluate(env: Env, term: Term) -> tuple[Env, Value]:
     match term:
         case Int(_, value):
-            return env, IntCell(value)
+            return env, Literal(value)
         case Str(_, value):
-            return env, StrCell(value)
+            return env, Literal(value)
         case Var(_, text):
             if text not in env.values:
                 raise ExecutionError(f"unknown variable '{text}'")
@@ -463,61 +507,72 @@ def evaluate(env: Env, term: Term) -> tuple[Env, Cell]:
             _, val = evaluate(env, value)
             next_env = env.with_values({name.text: val})
             if isinstance(val, Closure):
-                # let of fn is recursive.
-                val.env = next_env
+                # Let of fn is recursive, so closure must be able to reference itself.
+                new_val = evolve(val, env=next_env)
+                next_env.values[name.text] = new_val
             return evaluate(next_env, next)
         case Function():
             return env, Closure(term, env)
         case If(_, condition, then, otherwise):
             _, cond = evaluate(env, condition)
-            if not isinstance(cond, BoolCell):
-                raise ExecutionError(f"condition in 'if' is not boolean")
-            if cond.value:
-                return evaluate(env, then)
-            return evaluate(env, otherwise)
+            match cond:
+                case Literal(True):
+                    return evaluate(env, then)
+                case Literal(False):
+                    return evaluate(env, otherwise)
+                case _:
+                    raise ExecutionError(f"condition in 'if' is not boolean")
         case Binary(_, lhs, op, rhs):
             _, lhs = evaluate(env, lhs)
             _, rhs = evaluate(env, rhs)
-            match op.value, lhs, rhs:
-                case Operator("+"), StrCell(left), StrCell(right):
-                    return env, StrCell(left + right)
-                case Operator("+"), IntCell(left), IntCell(right):
-                    return env, IntCell(left + right)
-                case Operator("-"), IntCell(left), IntCell(right):
-                    return env, IntCell(left - right)
-                case Operator("*"), IntCell(left), IntCell(right):
-                    return env, IntCell(left - right)
-                case Operator("/"), IntCell(left), IntCell(right):
-                    return env, IntCell(left // right)
-                case Operator("%"), IntCell(left), IntCell(right):
-                    return env, IntCell(left % right)
-                case Operator("=="), _, _:
-                    return env, IntCell(lhs == rhs)
-                case Operator("!="), _, _:
-                    return env, IntCell(lhs != rhs)
-                case Operator("<"), IntCell(left), IntCell(right):
-                    return env, BoolCell(left < right)
-                case Operator("<"), StrCell(left), StrCell(right):
-                    return env, BoolCell(left < right)
-                case Operator("<="), IntCell(left), IntCell(right):
-                    return env, BoolCell(left <= right)
-                case Operator("<="), StrCell(left), StrCell(right):
-                    return env, BoolCell(left <= right)
-                case Operator(">"), IntCell(left), IntCell(right):
-                    return env, BoolCell(left > right)
-                case Operator(">"), StrCell(left), StrCell(right):
-                    return env, BoolCell(left > right)
-                case Operator(">="), IntCell(left), IntCell(right):
-                    return env, BoolCell(left >= right)
-                case Operator(">="), StrCell(left), StrCell(right):
-                    return env, BoolCell(left >= right)
-                case Operator("&"), BoolCell(left), BoolCell(right):
-                    return env, BoolCell(left and right)
-                case Operator("|"), BoolCell(left), BoolCell(right):
-                    return env, BoolCell(left or right)
+            match lhs, rhs:
+                case Literal(), Literal():
+                    pass
                 case _:
                     raise ExecutionError(
-                        f"Invalid operands for '{op.value.name}': '{lhs}', '{rhs}'"
+                        f"Invalid operands for '{op.value.token}': {lhs}, {rhs}"
+                    )
+
+            match op.value.token, lhs.x, rhs.x:
+                case "+", int(), int():
+                    return env, Literal(lhs.x + rhs.x)
+                case "+", str(), str():
+                    return env, Literal(lhs.x + rhs.x)
+                case "-", int(), int():
+                    return env, Literal(lhs.x - rhs.x)
+                case "*", int(), int():
+                    return env, Literal(lhs.x * rhs.x)
+                case "/", int(), int():
+                    return env, Literal(lhs.x // rhs.x)
+                case "%", int(), int():
+                    return env, Literal(lhs.x % rhs.x)
+                case "==", _, _:
+                    return env, Literal(lhs == rhs)
+                case "!=", _, _:
+                    return env, Literal(lhs != rhs)
+                case "<", int(), int():
+                    return env, Literal(lhs.x < rhs.x)
+                case "<", str(), str():
+                    return env, Literal(lhs.x < rhs.x)
+                case ">", int(), int():
+                    return env, Literal(lhs.x > rhs.x)
+                case ">", str(), str():
+                    return env, Literal(lhs.x > rhs.x)
+                case "<=", int(), int():
+                    return env, Literal(lhs.x <= rhs.x)
+                case "<=", str(), str():
+                    return env, Literal(lhs.x <= rhs.x)
+                case ">=", int(), int():
+                    return env, Literal(lhs.x >= rhs.x)
+                case ">=", str(), str():
+                    return env, Literal(lhs.x >= rhs.x)
+                case "&", bool(), bool():
+                    return env, Literal(lhs.x and rhs.x)
+                case "|", bool(), bool():
+                    return env, Literal(lhs.x or rhs.x)
+                case _:
+                    raise ExecutionError(
+                        f"Invalid operands for '{op.value.token}': {lhs}, {rhs}"
                     )
         case Call(_, callee, arguments):
             _, f = evaluate(env, callee)
