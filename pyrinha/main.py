@@ -408,21 +408,34 @@ class Env:
 class StrCell(Cell):
     value: str
 
+    def __str__(self):
+        return self.value
+
 
 @define
 class IntCell(Cell):
     value: int
+
+    def __str__(self):
+        return str(self.value)
 
 
 @define
 class BoolCell(Cell):
     value: bool
 
+    def __str__(self):
+        return "true" if self.value else "false"
+
 
 @define
 class Closure(Cell):
     function: Function
     env: Env
+
+    def __str__(self):
+        ptr = hex(id(self))[-6:]
+        return f"<Closure#{ptr} fn ({args})>"
 
 
 # ---- Interpreter ----
@@ -456,7 +469,7 @@ def evaluate(env: Env, term: Term) -> tuple[Env, Cell]:
         case Function():
             return env, Closure(term, env)
         case If(_, condition, then, otherwise):
-            _, cond = evaluate(condition)
+            _, cond = evaluate(env, condition)
             if not isinstance(cond, BoolCell):
                 raise ExecutionError(f"condition in 'if' is not boolean")
             if cond.value:
@@ -516,15 +529,15 @@ def evaluate(env: Env, term: Term) -> tuple[Env, Cell]:
                 )
             values = (evaluate(env, arg) for arg in arguments)
             params = {
-                Var(param.text): value
+                param.text: value
                 for param, (_, value) in zip(f.function.parameters, values)
             }
             call_env = f.env.with_values(params)
             return evaluate(call_env, f.function.value)
         case Print(_, value):
             _, val = evaluate(env, value)
-            print(val)
-            return val
+            print(val, end="")
+            return env, val
         case _:
             raise ExecutionError(f"Unexpected type {type(term)}")
 
@@ -535,10 +548,18 @@ def evaluate(env: Env, term: Term) -> tuple[Env, Cell]:
 def main(ast_obj):
     node = converter.structure(ast_obj, File)
     print(node)
+    print()
     run_file(node)
 
 
 if __name__ == "__main__":
-    with Path("files/fib.json").open() as f:
+    from argparse import ArgumentParser
+    from pathlib import Path
+
+    p = ArgumentParser()
+    p.add_argument("file", type=Path, help="AST file to execute")
+    args = p.parse_args()
+
+    with args.file.open() as f:
         ast = json.load(f)
     main(ast)
