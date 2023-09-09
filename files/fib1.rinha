@@ -8,12 +8,7 @@ let fib = fn (n) => {
 
 let run_fib = fn (n) => {
     let f = fib(n);
-    let _ = print("Fibonacci(");
-    let _ = print(n);
-    let _ = print(") = ");
-    let _ = print(f);
-    print("
-")
+    print("Fibonacci(" + n + ") = " + f)
 };
 
 let _ = run_fib(10);
