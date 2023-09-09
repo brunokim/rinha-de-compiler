@@ -5,3 +5,6 @@
 # Vim swap
 .*.swp
 .*.swo
+
+# Python temporary files
+__pycache__
