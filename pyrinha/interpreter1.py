@@ -2,9 +2,10 @@ import io
 import json
 import sys
 
-from attrs import frozen
+from attrs import frozen, define, field
 
 from pyrinha.nodes import *
+from pyrinha.nodes import BinaryOp
 from pyrinha.values import *
 
 r"""
@@ -206,7 +207,7 @@ def node_str(node: Node) -> str:
             case (Call(callee=callee, arguments=arguments), level):
                 stack.append(")")
                 # Insere os argumentos (e vírgulas) na ordem reversa.
-                for i, arg in enumerate(parameters[::-1]):
+                for i, arg in enumerate(arguments[::-1]):
                     stack.append((arg, level))
                     if i < len(parameters) - 1:
                         stack.append(", ")
@@ -273,12 +274,222 @@ que deve falhar com RecursionError.
 
 """
 
+# ---- Compiler ----
+
+
+class Compiler:
+    chunks: list["Chunk"] = field(converter=list, factory=list)
+
+    def new_chunk(self) -> "Chunk":
+        chunk = Chunk()
+        self.chunks.append(chunk)
+        return chunk
+
+    def compile_file(self, file: File) -> list["Chunk"]:
+        self.chunks = []
+        chunk = self.new_chunk()
+        self.compile(chunk, file.expression)
+        chunk.push(Halt())
+        return self.chunks
+
+    def compile(self, chunk: "Chunk", term: Term):
+        match term:
+            case Print(value=value):
+                self.compile(chunk, value)
+                chunk.push(Write())
+
+            case Var(text=text):
+                chunk.push(Get(text))
+
+            case Int(value=value) | Str(value=value) | Bool(value=value):
+                chunk.push(Put(value))
+
+            case Let(name=name, value=value, next=next):
+                self.compile(chunk, value)
+                chunk.push(Allocate([name.text]))
+                self.compile(chunk, next)
+                chunk.push(Deallocate())
+
+            case Function(value=value, parameters=parameters):
+                fn_chunk = self.new_chunk()
+                fn_chunk.push(Allocate(param.text for param in parameters))
+                self.compile(fn_chunk, value)
+                fn_chunk.push(Deallocate())
+                fn_chunk.push(Proceed())
+
+                chunk.push(CloseOver(fn_chunk))
+
+            case Binary(lhs=lhs, op=op, rhs=rhs):
+                self.compile(chunk, lhs)
+                self.compile(chunk, rhs)
+                chunk.push(Operation(op))
+
+            case If(condition=condition, then=then, otherwise=otherwise):
+                jump_otherwise = JumpIfFalse(InstructionPointer(chunk, -1))
+                jump_end = Jump(InstructionPointer(chunk, -1))
+
+                self.compile(chunk, condition)
+                chunk.push(jump_otherwise)
+                self.compile(chunk, then)
+                chunk.push(jump_end)
+                jump_otherwise.target.chunk_index = len(chunk.instructions)
+
+                self.compile(chunk, otherwise)
+                jump_end.target.chunk_index = len(chunk.instructions)
+
+            case Call(callee=callee, arguments=arguments):
+                for arg in arguments:
+                    self.compile(chunk, arg)
+                self.compile(chunk, callee)
+                chunk.push(Invoke())
+
+
+# ---- Instructions ----
+
+
+@define
+class Instruction:
+    def __str__(self):
+        name = type(self).__name__.lower()
+        if not self._params:
+            return name
+        return f"{name} {', '.join(self._params)}"
+
+    @property
+    def _params(self) -> list[str]:
+        return []
+
+
+@define
+class Chunk:
+    instructions: list[Instruction] = field(converter=list, factory=list)
+
+    def push(self, instr: Instruction):
+        self.instructions.append(instr)
+
+    def id_str(self) -> str:
+        ptr = hex(id(self))
+        return "#" + ptr[-6:]
+
+
+@define
+class InstructionPointer:
+    chunk: Chunk
+    chunk_index: int
+
+    def __str__(self):
+        return f"{self.chunk.id_str()}:{self.chunk_index:03d}"
+
+
+@define
+class Put(Instruction):
+    value: int | str | bool
+
+    @property
+    def _params(self) -> list[str]:
+        match self.value:
+            case int():
+                return [str(self.value)]
+            case str():
+                return [repr(self.value)]
+            case True:
+                return ["true"]
+            case False:
+                return ["false"]
+
+
+@define
+class Get(Instruction):
+    name: str
+
+    @property
+    def _params(self) -> list[str]:
+        return [self.name]
+
+
+@define
+class Write(Instruction):
+    pass
+
+
+@define
+class JumpIfFalse(Instruction):
+    target: InstructionPointer
+
+    @property
+    def _params(self) -> list[str]:
+        return [str(self.target)]
+
+
+@define
+class Jump(Instruction):
+    target: InstructionPointer
+
+    @property
+    def _params(self) -> list[str]:
+        return [str(self.target)]
+
+
+@define
+class Allocate(Instruction):
+    names: list[str] = field(factory=list, converter=list)
+
+    @property
+    def _params(self) -> list[str]:
+        return self.names
+
+
+@define
+class Deallocate(Instruction):
+    pass
+
+
+@define
+class Proceed(Instruction):
+    pass
+
+
+@define
+class Invoke(Instruction):
+    pass
+
+
+@define
+class Operation(Instruction):
+    op: BinaryOp
+
+    @property
+    def _params(self) -> list[str]:
+        return [self.op.value.token]
+
+
+@define
+class Halt(Instruction):
+    pass
+
+
+@define
+class CloseOver(Instruction):
+    fn: Chunk
+
+    @property
+    def _params(self) -> list[str]:
+        return [self.fn.id_str()]
+
+
 # ---- Main ----
 
 
-def main(node: Node):
-    print(node)
+def main(file: File):
+    print(file)
     print()
+
+    chunks = Compiler().compile_file(file)
+    for chunk in chunks:
+        print("% chunk", chunk.id_str())
+        for instr in chunk.instructions:
+            print(instr)
+        print()
 
 
 if __name__ == "__main__":
@@ -297,8 +508,8 @@ if __name__ == "__main__":
 
     with args.file.open() as f:
         ast = json.load(f)
-    node = ast_converter().structure(ast, File)
+    file = ast_converter().structure(ast, File)
 
     # Restaura o limite default.
     sys.setrecursionlimit(limit)
-    main(node)
+    main(file)
