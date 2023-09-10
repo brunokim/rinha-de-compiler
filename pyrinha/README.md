@@ -9,6 +9,8 @@ A ordem de leitura recomendada é:
 - [values.py](values.py) -- Define os valores de runtime de Rinha
 - [interpreter0.py](interpreter0.py) -- Primeira implementação de um interpretador,
    com um método de tree walking e totalmente recursivo (e ineficiente).
+- [interpreter1.py](interpreter0.py) -- Segunda implementação de um interpretador,
+   com um método de tree walking sem recursão.
 
 
 ## Execução

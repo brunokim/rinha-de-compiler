@@ -1,4 +1,5 @@
 import json
+import sys
 
 from attrs import frozen
 
@@ -260,10 +261,7 @@ def evaluate0(env: Env, term: Term) -> Value:
 # ---- Main ----
 
 
-def main(ast_obj: dict):
-    # Aqui finalmente usamos o converter que construímos para os Node da árvore, contendo
-    # alguns hooks customizados de desserialização.
-    node = ast_converter().structure(ast_obj, File)
+def main(node: Node):
     print(node)
     print()
 
@@ -287,6 +285,18 @@ if __name__ == "__main__":
     p.add_argument("file", type=Path, help="AST file to execute")
     args = p.parse_args()
 
+    # Temporariamente aumenta o limite de recursão para as bibliotecas json e cattrs,
+    # que dependem de recursão para construir objetos.
+    limit = sys.getrecursionlimit()
+    print(f"Default recursion limit: {limit}")
+    sys.setrecursionlimit(10000)
+
+    # Aqui finalmente usamos o converter que construímos para os Node da árvore, contendo
+    # alguns hooks customizados de desserialização.
     with args.file.open() as f:
         ast = json.load(f)
-    main(ast)
+    node = ast_converter().structure(ast, File)
+
+    # Restaura o limite default.
+    sys.setrecursionlimit(limit)
+    main(node)
