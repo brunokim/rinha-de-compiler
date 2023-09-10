@@ -377,6 +377,9 @@ class InstructionPointer:
     chunk: Chunk
     chunk_index: int
 
+    def get_instr(self) -> Instruction:
+        return self.chunk.instructions[self.chunk_index]
+
     def __str__(self):
         return f"{self.chunk.id_str()}:{self.chunk_index:03d}"
 
@@ -477,19 +480,89 @@ class CloseOver(Instruction):
         return [self.fn.id_str()]
 
 
+# ---- Interpreter ----
+
+
+@define
+class Env:
+    values: dict[str, int | str | bool] = field(factory=dict, converter=dict)
+
+
+@define
+class Interpreter:
+    stack: list[int | str | bool] = field(factory=list, converter=list)
+    envs: list[Env] = field(factory=list, converter=list)
+
+    def run(self, chunk: Chunk):
+        ptr = InstructionPointer(chunk, 0)
+        instr = ptr.chunk.instructions[ptr.chunk_index]
+
+        while instr != Halt():
+            print(instr)
+            next_ptr = self.run_instr(instr)
+            if next_ptr is None:
+                ptr.chunk_index += 1
+            else:
+                ptr = next_ptr
+            instr = ptr.get_instr()
+
+    def run_instr(self, instr: Instruction):
+        match instr:
+            case Put(value):
+                self.stack.append(value)
+            case Get(name):
+                self.stack.append(self.envs[-1].values[name])
+            case Write():
+                print(self.stack.pop())
+            case Allocate(names):
+                num_params = len(names)
+                values = self.stack[-num_params:]
+                self.stack[-num_params:] = []
+                self.envs.append(
+                    Env({name: value for name, value in zip(names, values)})
+                )
+            case Deallocate():
+                self.envs.pop()
+            case JumpIfFalse(target):
+                value = self.stack.pop()
+                if not isinstance(value, bool):
+                    raise ExecutionError(f"'if' condition is not bool")
+                if not value:
+                    return target
+            case Jump(target):
+                return target
+            case Invoke():
+                next_instr = InstructionPointer(instr.chunk, instr.chunk_index + 1)
+                self.call_stack.append(next_instr)
+                value = self.stack.pop()
+                print(value)
+                raise NotImplementedError()
+            case Proceed():
+                return self.call_stack.pop()
+            case Operation(op):
+                pass
+            case CloseOver(fn):
+                pass
+
+
 # ---- Main ----
 
 
 def main(file: File):
+    print("== AST ==")
     print(file)
     print()
 
+    print("== Chunks ==")
     chunks = Compiler().compile_file(file)
     for chunk in chunks:
         print("% chunk", chunk.id_str())
         for instr in chunk.instructions:
             print(instr)
         print()
+
+    print("== Interpreter ==")
+    Interpreter().run(chunks[0])
 
 
 if __name__ == "__main__":
