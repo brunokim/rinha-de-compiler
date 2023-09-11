@@ -58,6 +58,60 @@ class ExecutionError(Exception):
     msg: str
 
 
+def run_op(lhs, op, rhs, location):
+    match lhs, rhs:
+        case Literal(), Literal():
+            pass
+        case _:
+            raise ExecutionError(
+                location, f"Invalid operands for '{op.value.token}': {lhs}, {rhs}"
+            )
+
+    # A saber: eu amo o match-case introduzido no Python 3.10. Ele possui ainda outras
+    # capacidades sintáticas para não dar vontade nunca mais de fazer um instanceof().
+    # Leia o tutorial completo em https://peps.python.org/pep-0636/
+    match op, lhs.x, rhs.x:
+        case BinaryOp.ADD, int(), int():
+            return Literal(lhs.x + rhs.x)
+        case BinaryOp.ADD, str(), int():
+            return Literal(lhs.x + str(rhs.x))
+        case BinaryOp.ADD, int(), str():
+            return Literal(str(lhs.x) + rhs.x)
+        case BinaryOp.ADD, str(), str():
+            return Literal(lhs.x + rhs.x)
+        case BinaryOp.SUB, int(), int():
+            return Literal(lhs.x - rhs.x)
+        case BinaryOp.MUL, int(), int():
+            return Literal(lhs.x * rhs.x)
+        case BinaryOp.DIV, int(), int():
+            return Literal(lhs.x // rhs.x)
+        case BinaryOp.REM, int(), int():
+            return Literal(lhs.x % rhs.x)
+        # TODO: verificar se precisamos lançar um erro para == e != caso sejam de tipos diferentes.
+        case BinaryOp.EQ, _, _:
+            return Literal(lhs == rhs)
+        case BinaryOp.NEQ, _, _:
+            return Literal(lhs != rhs)
+        # TODO: verificar se podemos usar os operadores de comparação também com strings.
+        case BinaryOp.LT, int(), int():
+            return Literal(lhs.x < rhs.x)
+        case BinaryOp.GT, int(), int():
+            return Literal(lhs.x > rhs.x)
+        case BinaryOp.LTE, int(), int():
+            return Literal(lhs.x <= rhs.x)
+        case BinaryOp.GTE, int(), int():
+            return Literal(lhs.x >= rhs.x)
+        case BinaryOp.AND, bool(), bool():
+            return Literal(lhs.x and rhs.x)
+        case BinaryOp.OR, bool(), bool():
+            return Literal(lhs.x or rhs.x)
+        case _:
+            raise ExecutionError(
+                location,
+                f"Invalid operands for '{op.value.token}': {lhs}, {rhs}",
+            )
+
+
 def run_file0(file: File) -> Value:
     "Executa um arquivo no environment global."
 
@@ -142,57 +196,7 @@ def evaluate0(env: Env, term: Term) -> Value:
         case Binary(location, lhs, op, rhs):
             lhs = evaluate0(env, lhs)
             rhs = evaluate0(env, rhs)
-            match lhs, rhs:
-                case Literal(), Literal():
-                    pass
-                case _:
-                    raise ExecutionError(
-                        f"Invalid operands for '{op.value.token}': {lhs}, {rhs}"
-                    )
-
-            # A saber: eu amo o match-case introduzido no Python 3.10. Ele possui ainda outras
-            # capacidades sintáticas para não dar vontade nunca mais de fazer um instanceof().
-            # Leia o tutorial completo em https://peps.python.org/pep-0636/
-            match op.value.token, lhs.x, rhs.x:
-                case "+", int(), int():
-                    return Literal(lhs.x + rhs.x)
-                case "+", str(), int():
-                    return Literal(lhs.x + str(rhs.x))
-                case "+", int(), str():
-                    return Literal(str(lhs.x) + rhs.x)
-                case "+", str(), str():
-                    return Literal(lhs.x + rhs.x)
-                case "-", int(), int():
-                    return Literal(lhs.x - rhs.x)
-                case "*", int(), int():
-                    return Literal(lhs.x * rhs.x)
-                case "/", int(), int():
-                    return Literal(lhs.x // rhs.x)
-                case "%", int(), int():
-                    return Literal(lhs.x % rhs.x)
-                # TODO: verificar se precisamos lançar um erro para == e != caso sejam de tipos diferentes.
-                case "==", _, _:
-                    return Literal(lhs == rhs)
-                case "!=", _, _:
-                    return Literal(lhs != rhs)
-                # TODO: verificar se podemos usar os operadores de comparação também com strings.
-                case "<", int(), int():
-                    return Literal(lhs.x < rhs.x)
-                case ">", int(), int():
-                    return Literal(lhs.x > rhs.x)
-                case "<=", int(), int():
-                    return Literal(lhs.x <= rhs.x)
-                case ">=", int(), int():
-                    return Literal(lhs.x >= rhs.x)
-                case "&&", bool(), bool():
-                    return Literal(lhs.x and rhs.x)
-                case "||", bool(), bool():
-                    return Literal(lhs.x or rhs.x)
-                case _:
-                    raise ExecutionError(
-                        location,
-                        f"Invalid operands for '{op.value.token}': {lhs}, {rhs}",
-                    )
+            return run_op(lhs, op, rhs, location)
 
         # A função principal do Let não é criar um novo valor, mas sim um novo environment.
         # Nós avaliamos 'value' e associamos ao nome 'name' em um novo environment,

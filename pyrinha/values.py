@@ -1,4 +1,4 @@
-from attrs import frozen, field
+from attrs import frozen, field, define
 
 from pyrinha.nodes import Function
 
@@ -18,7 +18,7 @@ programa, que serão executados pelo interpretador.
 """
 
 
-@frozen
+@define
 class Value:
     pass
 
@@ -29,7 +29,13 @@ class Literal(Value):
     x: int | str | bool
 
     def __str__(self):
-        return str(self.x)
+        match self.x:
+            case int():
+                return str(self.x)
+            case str():
+                return repr(self.x)
+            case bool():
+                return str(self.x).lower()
 
 
 """

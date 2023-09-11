@@ -40,6 +40,7 @@ __all__ = [
     "Let",
     "Function",
     "If",
+    "BinaryOp",
     "Binary",
     "Call",
     "Print",

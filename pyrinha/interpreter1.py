@@ -2,11 +2,11 @@ import io
 import json
 import sys
 
-from attrs import frozen, define, field
+from attrs import frozen, define, field, evolve
 
 from pyrinha.nodes import *
-from pyrinha.nodes import BinaryOp
 from pyrinha.values import *
+from pyrinha.interpreter0 import ExecutionError, run_op
 
 r"""
 No interpreter0, notamos alguns potenciais problemas.
@@ -277,6 +277,16 @@ que deve falhar com RecursionError.
 # ---- Compiler ----
 
 
+@define
+class ChunkClosure(Value):
+    chunk: "Chunk"
+    env: Env
+
+    def __str__(self):
+        return "<#closure>"
+
+
+@define
 class Compiler:
     chunks: list["Chunk"] = field(converter=list, factory=list)
 
@@ -289,44 +299,44 @@ class Compiler:
         self.chunks = []
         chunk = self.new_chunk()
         self.compile(chunk, file.expression)
-        chunk.push(Halt())
+        chunk.push(Halt(file.location))
         return self.chunks
 
     def compile(self, chunk: "Chunk", term: Term):
         match term:
-            case Print(value=value):
+            case Print(location, value):
                 self.compile(chunk, value)
-                chunk.push(Write())
+                chunk.push(Write(location))
 
-            case Var(text=text):
-                chunk.push(Get(text))
+            case Var(location, text):
+                chunk.push(Get(location, text))
 
-            case Int(value=value) | Str(value=value) | Bool(value=value):
-                chunk.push(Put(value))
+            case Int(location, value) | Str(location, value) | Bool(location, value):
+                chunk.push(Put(location, Literal(value)))
 
-            case Let(name=name, value=value, next=next):
+            case Let(location, name, value, next):
                 self.compile(chunk, value)
-                chunk.push(Allocate([name.text]))
+                chunk.push(LetAllocate(location, name.text))
                 self.compile(chunk, next)
-                chunk.push(Deallocate())
+                chunk.push(Deallocate(location))
 
-            case Function(value=value, parameters=parameters):
+            case Function(location, value, parameters):
                 fn_chunk = self.new_chunk()
-                fn_chunk.push(Allocate(param.text for param in parameters))
+                fn_chunk.push(Allocate(location, [param.text for param in parameters]))
                 self.compile(fn_chunk, value)
-                fn_chunk.push(Deallocate())
-                fn_chunk.push(Proceed())
+                fn_chunk.push(Deallocate(location))
+                fn_chunk.push(Proceed(location))
 
-                chunk.push(CloseOver(fn_chunk))
+                chunk.push(CloseOver(location, fn_chunk))
 
-            case Binary(lhs=lhs, op=op, rhs=rhs):
+            case Binary(location, lhs, op, rhs):
                 self.compile(chunk, lhs)
                 self.compile(chunk, rhs)
-                chunk.push(Operation(op))
+                chunk.push(Operation(location, op))
 
-            case If(condition=condition, then=then, otherwise=otherwise):
-                jump_otherwise = JumpIfFalse(InstructionPointer(chunk, -1))
-                jump_end = Jump(InstructionPointer(chunk, -1))
+            case If(location, condition, then, otherwise):
+                jump_otherwise = JumpIfFalse(location, InstructionPointer(chunk, -1))
+                jump_end = Jump(location, InstructionPointer(chunk, -1))
 
                 self.compile(chunk, condition)
                 chunk.push(jump_otherwise)
@@ -337,11 +347,11 @@ class Compiler:
                 self.compile(chunk, otherwise)
                 jump_end.target.chunk_index = len(chunk.instructions)
 
-            case Call(callee=callee, arguments=arguments):
+            case Call(location, callee, arguments):
                 for arg in arguments:
                     self.compile(chunk, arg)
                 self.compile(chunk, callee)
-                chunk.push(Invoke())
+                chunk.push(Invoke(location))
 
 
 # ---- Instructions ----
@@ -349,6 +359,8 @@ class Compiler:
 
 @define
 class Instruction:
+    location: Loc
+
     def __str__(self):
         name = type(self).__name__.lower()
         if not self._params:
@@ -386,19 +398,11 @@ class InstructionPointer:
 
 @define
 class Put(Instruction):
-    value: int | str | bool
+    value: Value
 
     @property
     def _params(self) -> list[str]:
-        match self.value:
-            case int():
-                return [str(self.value)]
-            case str():
-                return [repr(self.value)]
-            case True:
-                return ["true"]
-            case False:
-                return ["false"]
+        return [str(self.value)]
 
 
 @define
@@ -443,6 +447,15 @@ class Allocate(Instruction):
 
 
 @define
+class LetAllocate(Instruction):
+    name: str
+
+    @property
+    def _params(self) -> list[str]:
+        return [self.name]
+
+
+@define
 class Deallocate(Instruction):
     pass
 
@@ -484,65 +497,92 @@ class CloseOver(Instruction):
 
 
 @define
-class Env:
-    values: dict[str, int | str | bool] = field(factory=dict, converter=dict)
-
-
-@define
 class Interpreter:
-    stack: list[int | str | bool] = field(factory=list, converter=list)
+    stack: list[Value] = field(factory=list, converter=list)
     envs: list[Env] = field(factory=list, converter=list)
+    call_stack: list[InstructionPointer] = field(factory=list, converter=list)
 
     def run(self, chunk: Chunk):
-        ptr = InstructionPointer(chunk, 0)
-        instr = ptr.chunk.instructions[ptr.chunk_index]
+        self.stack = []
+        self.envs = [Env()]
+        self.call_stack = []
 
-        while instr != Halt():
-            print(instr)
-            next_ptr = self.run_instr(instr)
+        ptr = InstructionPointer(chunk, 0)
+        while True:
+            next_ptr = self.run_step(ptr)
             if next_ptr is None:
                 ptr.chunk_index += 1
+            elif next_ptr.chunk is None:
+                # Halt
+                break
             else:
                 ptr = next_ptr
-            instr = ptr.get_instr()
 
-    def run_instr(self, instr: Instruction):
+    def run_step(self, ptr: InstructionPointer):
+        instr = ptr.get_instr()
+        # stack_str = "".join(f"[{v}]" for v in self.stack)
+        # top_env_str = "{" + ", ".join(self.envs[-1].values.keys()) + "}"
+        # print(ptr, f"{str(instr):25}", f"{stack_str:25}", top_env_str)
         match instr:
-            case Put(value):
+            case Put(value=value):
                 self.stack.append(value)
-            case Get(name):
+            case Get(name=name):
                 self.stack.append(self.envs[-1].values[name])
             case Write():
-                print(self.stack.pop())
-            case Allocate(names):
+                print(self.stack[-1])
+            case Allocate(names=names):
                 num_params = len(names)
                 values = self.stack[-num_params:]
                 self.stack[-num_params:] = []
-                self.envs.append(
-                    Env({name: value for name, value in zip(names, values)})
+                env = self.envs[-1]
+                new_env = env.with_values(
+                    {name: value for name, value in zip(names, values)}
                 )
+                self.envs.append(new_env)
+            case LetAllocate(name=name):
+                value = self.stack.pop()
+                env = self.envs[-1]
+                new_env = env.with_values({name: value})
+                if isinstance(value, ChunkClosure):
+                    value.env = new_env
+                self.envs.append(new_env)
             case Deallocate():
                 self.envs.pop()
-            case JumpIfFalse(target):
+            case JumpIfFalse(location, target):
                 value = self.stack.pop()
-                if not isinstance(value, bool):
-                    raise ExecutionError(f"'if' condition is not bool")
-                if not value:
-                    return target
-            case Jump(target):
-                return target
-            case Invoke():
-                next_instr = InstructionPointer(instr.chunk, instr.chunk_index + 1)
-                self.call_stack.append(next_instr)
-                value = self.stack.pop()
-                print(value)
-                raise NotImplementedError()
+                match value:
+                    case Literal(bool() as x):
+                        if not x:
+                            return evolve(target)
+                    case _:
+                        raise ExecutionError(location, f"'if' condition is not bool")
+            case Jump(target=target):
+                return evolve(target)
+            case Invoke(location):
+                self.call_stack.append(
+                    InstructionPointer(ptr.chunk, ptr.chunk_index + 1)
+                )
+                closure = self.stack.pop()
+                if not isinstance(closure, ChunkClosure):
+                    raise ExecutionError(
+                        location, f"callee is not callable: {type(closure).__name__}"
+                    )
+                self.envs.append(closure.env)
+                return InstructionPointer(closure.chunk, 0)
             case Proceed():
+                self.envs.pop()
                 return self.call_stack.pop()
-            case Operation(op):
-                pass
-            case CloseOver(fn):
-                pass
+            case Operation(location, op):
+                lhs, rhs = self.stack[-2:]
+                self.stack[-2:] = [run_op(lhs, op, rhs, location)]
+            case CloseOver(fn=fn):
+                self.stack.append(ChunkClosure(fn, self.envs[-1]))
+            case Halt():
+                return InstructionPointer(None, -1)
+            case _:
+                raise ExecutionError(
+                    None, f"unexpected instruction {type(instr).__name__}"
+                )
 
 
 # ---- Main ----
