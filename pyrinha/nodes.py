@@ -36,7 +36,7 @@ __all__ = [
     "Node",
     "Term",
     "File",
-    "Symbol",
+    "Parameter",
     "Let",
     "Function",
     "If",
@@ -48,6 +48,9 @@ __all__ = [
     "Int",
     "Str",
     "Bool",
+    "Tuple",
+    "First",
+    "Second",
     "ast_converter",
 ]
 
@@ -115,7 +118,7 @@ class File(Node):
 
 
 @frozen
-class Symbol(Node):
+class Parameter(Node):
     text: str
 
     def __str__(self):
@@ -124,7 +127,7 @@ class Symbol(Node):
 
 @frozen
 class Let(Term):
-    name: Symbol
+    name: Parameter
     value: Term
     next: Term
 
@@ -153,7 +156,7 @@ tipo certo.
 @frozen
 class Function(Term):
     value: Term
-    parameters: tuple[Symbol, ...] = field(factory=tuple, converter=tuple)
+    parameters: tuple[Parameter, ...] = field(factory=tuple, converter=tuple)
 
     def __str__(self):
         value = indent(str(self.value), "  ")
@@ -333,6 +336,31 @@ class Bool(Term):
         return "true" if self.value else "false"
 
 
+@frozen
+class Tuple(Term):
+    first: Term
+    second: Term
+
+    def __str__(self):
+        return f"({self.first}, {self.second})"
+
+
+@frozen
+class First(Term):
+    value: Term
+
+    def __str__(self):
+        return f"first({self.value})"
+
+
+@frozen
+class Second(Term):
+    value: Term
+
+    def __str__(self):
+        return f"second({self.value})"
+
+
 """
 Estas variáveis visam criar uma relação entre (nome da class Term) -> classe.
 Isto é útil para podermos converter um objeto serializado da AST, que possui
@@ -366,7 +394,7 @@ def ast_converter():
         }
 
     Se já estamos estruturando um Let, ao chegar no campo 'name' sabemos pela anotação
-    de tipos que este deve ser um Symbol. Contudo, no campo 'value' a anotação contém
+    de tipos que este deve ser um Parameter. Contudo, no campo 'value' a anotação contém
     Term, que é uma classe abstrata. Queremos neste momento ler o campo 'kind' do dict
     para decidir estruturar um Var.
 

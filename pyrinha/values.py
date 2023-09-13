@@ -26,14 +26,14 @@ class Value:
 @frozen
 class Literal(Value):
     "Literal contém um valor de Python wrapped como um valor de interpretador."
-    x: int | str | bool
+    x: int | str | bool | tuple[Value, Value]
 
     def __str__(self):
         match self.x:
             case int():
                 return str(self.x)
             case str():
-                return repr(self.x)
+                return self.x
             case bool():
                 return str(self.x).lower()
 

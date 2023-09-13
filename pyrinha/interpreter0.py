@@ -59,13 +59,16 @@ class ExecutionError(Exception):
 
 
 def run_op(lhs, op, rhs, location):
+    def fail():
+        raise ExecutionError(
+            location, f"Invalid operands for '{op.value.token}': {lhs}, {rhs}"
+        )
+
     match lhs, rhs:
         case Literal(), Literal():
             pass
         case _:
-            raise ExecutionError(
-                location, f"Invalid operands for '{op.value.token}': {lhs}, {rhs}"
-            )
+            fail()
 
     # A saber: eu amo o match-case introduzido no Python 3.10. Ele possui ainda outras
     # capacidades sintáticas para não dar vontade nunca mais de fazer um instanceof().
@@ -87,12 +90,14 @@ def run_op(lhs, op, rhs, location):
             return Literal(lhs.x // rhs.x)
         case BinaryOp.REM, int(), int():
             return Literal(lhs.x % rhs.x)
-        # TODO: verificar se precisamos lançar um erro para == e != caso sejam de tipos diferentes.
         case BinaryOp.EQ, _, _:
+            if type(lhs.x) != type(rhs.x):
+                fail()
             return Literal(lhs == rhs)
         case BinaryOp.NEQ, _, _:
+            if type(lhs.x) != type(rhs.x):
+                fail()
             return Literal(lhs != rhs)
-        # TODO: verificar se podemos usar os operadores de comparação também com strings.
         case BinaryOp.LT, int(), int():
             return Literal(lhs.x < rhs.x)
         case BinaryOp.GT, int(), int():
@@ -106,10 +111,7 @@ def run_op(lhs, op, rhs, location):
         case BinaryOp.OR, bool(), bool():
             return Literal(lhs.x or rhs.x)
         case _:
-            raise ExecutionError(
-                location,
-                f"Invalid operands for '{op.value.token}': {lhs}, {rhs}",
-            )
+            fail()
 
 
 def run_file0(file: File) -> Value:
@@ -134,6 +136,8 @@ def evaluate0(env: Env, term: Term) -> Value:
             return Literal(value)
         case Bool(value=value):
             return Literal(value)
+        case Tuple(first=first, second=second):
+            return Literal((first, second))
 
         # Para obter o valor de Var, consultamos se a variável está definida
         # no environment. Ela pode ter sido definida por um Let anterior, ou como
@@ -171,12 +175,31 @@ def evaluate0(env: Env, term: Term) -> Value:
         # inserindo prints em cada elemento:
         #
         #     let x = print(foo(print(a), print(b)))
-        #
-        # TODO: adicionar isso no spec da linguagem.
         case Print(value=value):
             val = evaluate0(env, value)
             print(val)
             return val
+
+        # First e Second são bem simples e diretos.
+        case First(location, value):
+            match value:
+                case Literal((first, _)):
+                    return first
+                case _:
+                    val_type = type(value).__name__
+                    raise ExecutionError(
+                        location, f"argument to 'first' is {val_type}, not a tuple"
+                    )
+
+        case Second(location, value):
+            match value:
+                case Literal((_, second)):
+                    return second
+                case _:
+                    val_type = type(value).__name__
+                    raise ExecutionError(
+                        location, f"argument to 'second' is {val_type}, not a tuple"
+                    )
 
         # O cálculo de operações binárias é bem direto, mas longo e repetitivo.
         # É possível fazer algo mais sucinto para obter a operação a partir do token, por

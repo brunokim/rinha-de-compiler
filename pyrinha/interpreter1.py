@@ -108,7 +108,7 @@ def node_str(node: Node) -> str:
         match node:
             # Caso base: não é necessário recursão, então usamos o método
             # __str__ do node (que é chamado por str()).
-            case ((Symbol() | Var() | Str() | Int() | Bool()) as term, _):
+            case ((Parameter() | Var() | Str() | Int() | Bool()) as term, _):
                 buf.write(str(term))
 
             # Um File empilha sua expressão para ser processada na próxima
@@ -116,14 +116,14 @@ def node_str(node: Node) -> str:
             case (File(expression=expression), level):
                 stack.append((expression, level))
 
-            # Print deve ser escrito como "print (value)\n", onde 'value' pode ser
+            # Print deve ser escrito como "print (value)", onde 'value' pode ser
             # um termo complexo. A estratégia é escrever "print (", então processar
             # 'value' na próxima iteração, e então escrever ")". Para isso, vamos
             # empilhar os elementos da seguinte forma:
             case (Print(value=value), level):
                 print_token = "print ("
                 value_token = (value, level)
-                close_token = ")" + indent(level)
+                close_token = ")"
 
                 stack += [close_token, value_token, print_token]
                 # Colocamos os elementos ao contrário! Como estamos trabalhando com
@@ -134,6 +134,24 @@ def node_str(node: Node) -> str:
             # em um case.
             case str():
                 buf.write(node)
+
+            # Fazemos o mesmo para as outras funções especiais First e Second.
+            #
+            #     first(<value>)
+            #     second(<value>)
+            case (First(value=value), level):
+                stack += [
+                    ")",
+                    (value, level),
+                    "first(",
+                ]
+
+            case (Second(value=value), level):
+                stack += [
+                    ")",
+                    (value, level),
+                    "second(",
+                ]
 
             # No caso mais simples de Binary, poderíamos empilhar apenas
             #
@@ -201,6 +219,18 @@ def node_str(node: Node) -> str:
                     "if ",
                 ]
 
+            # Para tuple, queremos escrever
+            #
+            #     tuple(<first>, <second>)
+            case (Tuple(first=first, second=second), level):
+                stack += [
+                    ")",
+                    (second, level),
+                    ", ",
+                    (first, level),
+                    "tuple(",
+                ]
+
             # Para uma chamada, queremos
             #
             #     <callee>(<arg0>, <arg1>, <arg2>)
@@ -259,6 +289,9 @@ Let.__str__ = node_str
 If.__str__ = node_str
 Call.__str__ = node_str
 Function.__str__ = node_str
+Tuple.__str__ = node_str
+First.__str__ = node_str
+Second.__str__ = node_str
 
 """
 Execute este script com
